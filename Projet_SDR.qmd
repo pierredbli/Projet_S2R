@@ -10,6 +10,7 @@ Quarto enables you to weave together content and executable code into a finished
 # Test Tests
 ```
 
+<<<<<<< HEAD
 ```{r}
 
 git add .
@@ -17,5 +18,8 @@ git commit -m "message"
 git push -u origin camille
 git pull origin main
 ```
+=======
+git add . git commit -m "message" git push -u origin camille
+>>>>>>> main
 
 test
