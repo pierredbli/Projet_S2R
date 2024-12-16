@@ -15,9 +15,10 @@ library(shiny.router)
 library(leaflet) 
 library(sf)
 library(ggplot2)
-git init
-git remote add origin https://github.com/VotreNomUtilisateur/VotreNomRepository.git
+git push -u origin main
 
+git remote set-url origin https://github.com/VotreNomUtilisateur/VotreBonRepository.git
+https://github.com/pierredbli/Projet_S2R.git
 ```
 
 ```{r}
