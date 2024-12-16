@@ -1,0 +1,597 @@
+---
+title: "Dash_Board_Interactif"
+author: "Pierre DOBELI"
+format: html
+editor: visual
+---
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(shiny) 
+library(shiny.router) 
+library(leaflet) 
+library(sf)
+library(ggplot2)
+git init
+git remote add origin https://github.com/VotreNomUtilisateur/VotreNomRepository.git
+
+```
+
+```{r}
+# Importation des données
+Data <- read_csv("Data_test.csv",show_col_types = FALSE)
+# Fusionner les colonnes et supprimer les anciennes
+Data <- Data %>%
+  mutate(datetime = paste(an, mois, jour, hrmn...14, sep = "-")) %>%  # Combiner les colonnes
+  mutate(datetime = as.POSIXct(datetime, format = "%Y-%m-%d-%H:%M:%S")) %>%  # Convertir en format date-heure
+  select(-jour, -mois, -an, -hrmn...14,-hrmn...15)  # Supprimer les colonnes d'origine
+# On enlève toutes les lignes si il y a des NA
+Data <- Data %>% drop_na()
+```
+
+```{r}
+### Crétation des différents DataFrame pour simplifier le code (On prends en compte que les conducteurs)
+
+
+#DataFrame pour la page1
+#Une donnée que je dois rajouter
+# Calculer le nombre total d'accidents et de morts 
+data_introduction <- Data %>% 
+  summarise( total_accidents = n(), total_morts = sum(ifelse(grav == 2, 1, 0)) )
+
+data <- Data %>%
+  filter(!is.na(datetime)) %>%
+  mutate(day = as.Date(datetime))
+data <- data %>%
+  mutate(mort = ifelse(grav == 2, 1, 0))
+accidents_par_dep <- data %>%
+  group_by(dep) %>%
+  summarise(
+    num_Acc_unique = n_distinct(Num_Acc),
+    total_accidents = n(),
+    avg_accidents_per_day = n() / n_distinct(day),
+    avg_mort_per_year = sum(mort) / n_distinct(year(datetime))
+  ) %>%
+  arrange(desc(total_accidents)) %>%
+  mutate(rank = row_number())
+
+
+  ### DataFrame pour la page3 ###
+# 1/ 3 dataFrames pour chacun des moyen de transport
+voitures <- c(3, 7, 8, 9, 10)
+moto <- c(31,32,33,34)
+velo <- c(01,80)
+
+accidents_voiture <- Data %>%
+  filter(catu == 1 & sexe != -1 & catv %in% voitures) %>%
+  mutate(
+    grav = factor(
+      grav,
+      levels = c(1, 2, 3, 4),
+      labels = c("Indemne", "Tué", "Blessé hospitalisé", "Blessé léger")
+    )
+  )
+accidents_moto <- Data %>%
+  filter(catu ==1 & sexe != -1 & catv %in% moto)%>%
+  mutate(
+    grav = factor(
+      grav,
+      levels = c(1, 2, 3, 4),
+      labels = c("Indemne", "Tué", "Blessé hospitalisé", "Blessé léger")
+    )
+  )
+accidents_velo <- Data %>%
+  filter(catu ==1 & sexe != -1 & catv %in% velo)%>%
+  mutate(
+    grav = factor(
+      grav,
+      levels = c(1, 2, 3, 4),
+      labels = c("Indemne", "Tué", "Blessé hospitalisé", "Blessé léger")
+    )
+  )
+#2/ Calcul de la proportion des accidents par sexe
+accidents_par_sexe_voiture <- accidents_voiture %>%
+  group_by(sexe) %>%
+  summarise(nb_accidents = n(), .groups = "drop") %>%
+  mutate(proportion = nb_accidents / sum(nb_accidents))
+
+accidents_par_sexe_moto <- accidents_moto %>%
+  group_by(sexe) %>%
+  summarise(nb_accidents = n(), .groups = "drop") %>%
+  mutate(proportion = nb_accidents / sum(nb_accidents))
+
+accidents_par_sexe_velo <- accidents_velo %>%
+  group_by(sexe) %>%
+  summarise(nb_accidents = n(), .groups = "drop") %>%
+  mutate(proportion = nb_accidents / sum(nb_accidents))
+
+#3/ Calcul de la proportion des accidents par sexe et gravité
+accidents_par_grav_sexe_voiture <- accidents_voiture %>%
+  group_by(sexe, grav) %>%
+  summarise(nb_accidents = n(), .groups = "drop") %>%
+  group_by(sexe) %>%
+  mutate(proportion = nb_accidents / sum(nb_accidents)) %>%
+  ungroup()
+
+accidents_par_grav_sexe_moto <- accidents_moto %>%
+  group_by(sexe, grav) %>%
+  summarise(nb_accidents = n(), .groups = "drop") %>%
+  group_by(sexe) %>%
+  mutate(proportion = nb_accidents / sum(nb_accidents)) %>%
+  ungroup()
+
+accidents_par_grav_sexe_velo <- accidents_velo %>%
+  group_by(sexe, grav) %>%
+  summarise(nb_accidents = n(), .groups = "drop") %>%
+  group_by(sexe) %>%
+  mutate(proportion = nb_accidents / sum(nb_accidents)) %>%
+  ungroup()
+
+  ### DataFrame pour la page4 ###
+
+process_accidents_data <- function(accidents_data) {
+  # Filtrer pour garder les conducteurs uniquement (catu == 1)
+  Data_catu <- accidents_data %>%
+    filter(catu == 1) %>%  # Filtrer pour garder les conducteurs uniquement
+    mutate(age = 2024 - an_nais)  # Calculer l'âge à partir de l'année de naissance
+  # Créer des classes d'âge (18-25, 25-30, 30-40, 40-50, 50-65, 65+)
+  Data_classe_age <- Data_catu %>%
+    mutate(age_class = case_when(
+      age >= 18 & age <= 30 ~ "18-30",     # Classe 18-30 ans
+      age > 30 & age <= 45 ~ "30-45",      # Classe 26-30 ans
+      age > 45 & age <= 60 ~ "45-60",      # Classe 31-40 ans
+      age > 60 ~ "60+"                     # Classe 65+ ans
+    )) %>%
+    drop_na()  # Supprimer les lignes avec des NA (au cas où)
+  # Proportion des accidents par classe d'âge
+  accidents_par_age_class <- Data_classe_age %>%
+    group_by(age_class) %>%
+    summarise(nb_accidents = n(), .groups = "drop") %>%
+    mutate(proportion_age = nb_accidents / sum(nb_accidents))  # Calculer la proportion d'accidents par classe d'âge
+  # Proportion de chaque gravité par classe d'âge
+  accidents_par_grav_age_class <- Data_classe_age %>%
+    group_by(age_class, grav) %>%
+    summarise(nb_accidents = n(), .groups = "drop") %>%
+    mutate(proportion_grav = nb_accidents / sum(nb_accidents)) %>%  # Proportion de chaque gravité par classe d'âge
+    mutate(grav = case_when(
+      grav == "Indemne" ~ "Indemne",
+      grav == "Tué" ~ "Tué",
+      grav == "Blessé hospitalisé" ~ "Blessé hospitalisé",
+      grav == "Blessé léger" ~ "Blessé léger",
+      TRUE ~ grav  # Pour gérer d'autres valeurs possibles
+    ))
+  # Retourner les résultats traités
+  list(accidents_par_age_class = accidents_par_age_class, 
+       accidents_par_grav_age_class = accidents_par_grav_age_class)
+}
+
+# Appliquer la fonction sur chaque dataframe (accidents_voiture, accidents_moto, accidents_velo)
+accidents_voiture_results <- process_accidents_data(accidents_voiture)
+accidents_moto_results <- process_accidents_data(accidents_moto)
+accidents_velo_results <- process_accidents_data(accidents_velo)
+
+# Les résultats pour chaque dataframe
+accidents_voiture_age <-accidents_voiture_results$accidents_par_age_class
+accidents_velo_age <-accidents_moto_results$accidents_par_age_class
+accidents_moto_age <-accidents_velo_results$accidents_par_age_class
+
+accidents_voiture_age_grav<-accidents_voiture_results$accidents_par_grav_age_class
+accidents_moto_age_grav<-accidents_moto_results$accidents_par_grav_age_class
+accidents_velo_age_grav<-accidents_velo_results$accidents_par_grav_age_class
+```
+
+```{r}
+accidents_voiture_age
+```
+
+```{r}
+
+t
+
+
+
+```
+
+```{r}
+
+# Charger les données GeoJSON des départements de France
+departements <- st_read("https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/departements-version-simplifiee.geojson")
+
+# UI pour la Page 1 : Sélection du département
+page1_ui <- fluidPage(
+  titlePanel("Analyse des caractères à risques en fonction de votre profil"),
+  h4("Quelques chiffres sur les accidents de la route :"),
+  uiOutput("chiffres_introduction"),
+  h4("Choissisez votre département"),
+  leafletOutput("map", height = "500px"),
+  h4("Département sélectionné :"),
+  textOutput("selected_departement"),
+  h4("Informations sur les accidents dans le département :"),
+  uiOutput("accidents_plot"),
+  actionButton("to_page2", "Continuer")
+)
+
+# UI pour la Page 2 : Questionnaire
+page2_ui <- fluidPage(
+  titlePanel("Questionnaire sur votre profil"),
+  selectInput(
+    "transport",
+    "Quel type de transport utilisez-vous ?",
+    choices = c("Voiture", "Vélo", "Moto"),
+    selected = "Voiture"
+  ),
+  sliderInput(
+    "age",
+    "Quel âge avez-vous ?",
+    min = 18,
+    max = 99,
+    value = 25
+  ),
+  radioButtons(
+    "sexe",
+    "Quel est votre sexe de naissance ?",
+    choices = c("M" = "M", "F" = "F"),
+    selected = "M"
+  ),
+  actionButton("submit", "Soumettre"),
+  actionButton("to_page1", "Retour à la Page 1"),
+  actionButton("to_page3", "Voir les graphiques")
+)
+
+# UI pour la Page 3 : Affichage des graphiques
+page3_ui <- fluidPage(
+  titlePanel("Influence du sexe sur les accidents"),
+  uiOutput("page_3"),
+  uiOutput("dynamic_comments_transport_sexe"),
+  actionButton("to_page1", "Retour à la Page 1"),
+  actionButton("to_page4", "Voir d'autres graphiques")
+)
+
+# UI pour la Page 4
+page4_ui <- fluidPage(
+  titlePanel("Influence de l'âge sur les accidents"),
+  uiOutput("page_4"),
+  actionButton("to_page1", "Retour à la Page 1")
+  
+)
+```
+
+```{r}
+View(accidents_voiture)
+```
+
+```{r}
+server <- function(input, output, session) {
+  
+  #### Page n°1 ####
+  output$chiffres_introduction <- renderUI({
+    req(data_introduction)
+    # Affichage des informations sur les accidents
+    div(
+      h4("Le nombre total d'accidents de la route en 2023 est de :"),
+      p(data_introduction$total_accidents),
+      h4("De plus, le nombre de morts sur nos routes est de :"),
+      p(data_introduction$total_morts)
+    )
+  })
+  selected_departement <- reactiveVal(NULL)
+  responses <- reactiveValues(departement = NULL, transport = NULL, age = NULL, sexe = NULL)
+
+  # Afficher la carte interactive
+  output$map <- renderLeaflet({
+    leaflet(departements) %>%
+      addTiles() %>%
+      addPolygons(
+        layerId = ~code,
+        fillColor = "lightblue",
+        weight = 1,
+        opacity = 1,
+        color = "white",
+        fillOpacity = 0.7,
+        highlight = highlightOptions(
+          weight = 3,
+          color = "blue",
+          fillOpacity = 0.9,
+          bringToFront = TRUE
+        )
+      ) %>%
+      setView(lng = 2.2137, lat = 46.2276, zoom = 6)
+  })
+
+  observeEvent(input$map_shape_click, {
+    departement <- input$map_shape_click$id
+    selected_departement(departement)
+  })
+
+  output$selected_departement <- renderText({
+    selected_departement()
+  })
+
+  output$accidents_plot <- renderUI({
+    selected_dep <- selected_departement()  # Département sélectionné
+    
+    # Vérifier que le département est dans les données de `accidents_par_departement`
+    department_data <- accidents_par_dep %>% filter(dep == selected_dep)
+
+    if (nrow(department_data) == 0) {
+      return(h4("Données non disponibles pour ce département."))
+    }
+
+    # Affichage des informations sur les accidents
+    div(
+      h4("Nombre total d'accidents :"),
+      p(department_data$total_accidents),
+      h4("Moyenne des accidents par jour :"),
+      p(round(department_data$avg_accidents_per_day, 2)),
+      h4("Le nombre moyen de morts par an pour ce département s'élève à :"),
+      p(department_data$avg_mort_per_year),  # Correction de la variable
+      h4("Rang en termes d'accidents :"),
+      p(department_data$rank)
+    )
+  })
+
+  
+  #### Page n°2 ####
+  
+  observeEvent(input$to_page2, {
+    if (!is.null(selected_departement())) {
+      responses$departement <- selected_departement()
+      updateTabsetPanel(session, "pages", selected = "page2")
+    } else {
+      showModal(modalDialog(
+        title = "Attention",
+        "Veuillez sélectionner un département avant de continuer.",
+        easyClose = TRUE
+      ))
+    }
+  })
+
+  observeEvent(input$submit, {
+    responses$transport <- input$transport
+    responses$age <- input$age
+    responses$sexe <- input$sexe
+
+    showModal(modalDialog(
+      title = "Réponses enregistrées",
+      paste0(
+        "Département : ", responses$departement, "\n",
+        "Transport : ", responses$transport, "\n",
+        "Âge : ", responses$age, "\n",
+        "Sexe : ", responses$sexe
+      ),
+      easyClose = TRUE
+    ))
+  })
+  
+ observeEvent(input$to_page3, {
+  updateTabsetPanel(session, "pages", selected = "page3")
+})
+
+output$page_3 <- renderUI({
+  req(responses$departement, responses$transport, responses$age, responses$sexe)
+  req(accidents_voiture, accidents_velo, accidents_moto)
+  
+  plot_data <- switch(
+    responses$transport,
+    "Voiture" = list(sexe = accidents_par_sexe_voiture, grav = accidents_par_grav_sexe_voiture),
+    "Moto" = list(sexe = accidents_par_sexe_moto, grav = accidents_par_grav_sexe_moto),
+    "Vélo" = list(sexe = accidents_par_sexe_velo, grav = accidents_par_grav_sexe_velo),
+    NULL
+  )
+  
+  # Vérifier que les données existent avant de tracer
+  if (is.null(plot_data)) {
+    return(h4("Aucune donnée disponible pour le mode de transport sélectionné."))
+  }
+  
+  div(
+    plotOutput("sexe_plot"),
+    plotOutput("grav_plot")
+  )
+})
+
+# Fonction pour générer les commentaires en fonction du transport
+output$dynamic_comments_transport_sexe <- renderUI({
+  req(responses$transport, responses$sexe)
+  cat("Transport: ", responses$transport, "\n")
+  cat("Sexe: ", responses$sexe, "\n")
+  
+  if (responses$transport == "Voiture" && responses$sexe == "M") {
+    comments <- "Les jeunes conducteurs ont un risque plus élevé d'accidents en voiture."
+  } else if (responses$transport == "Voiture" && responses$sexe == "F") {
+    comments <- "Les conducteurs plus âgés ont tendance à être plus prudents, mais les accidents sont souvent plus graves."
+  } else if (responses$transport == "Moto" && responses$sexe == "M") {
+    comments <- "Les accidents de moto sont plus graves en raison de l'exposition directe du conducteur."
+  } else if (responses$transport == "Moto" && responses$sexe == "F") {
+    comments <- "Les cyclistes sont particulièrement vulnérables dans les zones urbaines à forte circulation."
+  } else if (responses$transport == "Vélo" && responses$sexe == "M") {
+    comments <- "Les cyclistes sont particulièrement vulnérables dans les zones urbaines à forte circulation."
+  } else if (responses$transport == "Vélo" && responses$sexe == "F") {
+    comments <- "Les cyclistes sont particulièrement vulnérables dans les zones urbaines à forte circulation."
+  } else {
+    comments <- "Aucun commentaire disponible."
+  }
+  
+  div(
+    h4("Commentaires spécifiques au mode de transport et à l'âge :"),
+    p(comments)
+  )
+})
+
+
+output$sexe_plot <- renderPlot({
+  req(responses$transport)
+  plot_data <- switch(
+    responses$transport,
+    "Voiture" = accidents_par_sexe_voiture,
+    "Moto" = accidents_par_sexe_moto,
+    "Vélo" = accidents_par_sexe_velo,
+    NULL
+  )
+  
+  ggplot(plot_data, aes(x = factor(sexe), y = proportion, fill = factor(sexe))) +
+    geom_bar(stat = "identity") +
+    geom_text(aes(label = scales::percent(proportion, accuracy = 0.1)), 
+              vjust = -0.5, color = "black", size = 4) +
+    labs(
+      title = "Proportion des Accidents par Sexe",
+      x = "Sexe",
+      y = "Proportion d'Accidents",
+      fill = "Sexe"
+    ) +
+    scale_fill_brewer(palette = "Set1") +
+    theme_minimal()
+})
+
+output$grav_plot <- renderPlot({
+  req(responses$transport)
+  plot_data <- switch(
+    responses$transport,
+    "Voiture" = accidents_par_grav_sexe_voiture,
+    "Moto" = accidents_par_grav_sexe_moto,
+    "Vélo" = accidents_par_grav_sexe_velo,
+    NULL
+  )
+  
+  ggplot(plot_data, aes(x = factor(sexe), y = proportion, fill = grav)) +
+    geom_bar(stat = "identity", position = "stack") +
+    geom_text(
+      aes(label = ifelse(proportion > 0.05, scales::percent(proportion, accuracy = 0.1), "")), 
+      position = position_stack(vjust = 0.5), color = "black", size = 3.5
+    ) +
+    labs(
+      title = "Proportion des Accidents par Gravité et Sexe",
+      x = "Sexe",
+      y = "Proportion d'Accidents",
+      fill = "Gravité"
+    ) +
+    scale_fill_brewer(palette = "Set1") +
+    theme_minimal()
+})
+
+observeEvent(input$to_page1, {
+  updateTabsetPanel(session, "pages", selected = "page1")
+})
+
+  
+  #### Page n°4 ####
+observeEvent(input$to_page4, {
+  updateTabsetPanel(session, "pages", selected = "page4")
+})
+
+output$page_4 <- renderUI({
+  req(responses$departement, responses$transport, responses$age, responses$sexe)
+  div(
+    plotOutput("age_plot"),
+    plotOutput("age_grav_plot")
+  )
+})
+
+output$age_plot <- renderPlot({
+  req(responses$transport)
+  plot_data <- switch(
+    responses$transport,
+    "Voiture" = accidents_voiture_age,
+    "Moto" = accidents_moto_age,
+    "Vélo" = accidents_velo_age,
+    NULL
+  )
+  
+  # Graphique 1 : Proportion des accidents par classe d'âge
+  ggplot(plot_data, aes(x = age_class, y = proportion_age, fill = age_class)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(title = "Proportion des Accidents par Classe d'Âge",
+         x = "Classe d'âge",
+         y = "Proportion d'Accidents") +
+    theme_minimal() +
+    scale_fill_brewer(palette = "Set2") +
+    geom_text(aes(label = scales::percent(proportion_age, accuracy = 0.1)), vjust = -0.5)  # Ajouter les proportions numériquement
+})
+
+output$age_grav_plot <- renderPlot({
+  req(responses$transport)
+  plot_data <- switch(
+    responses$transport,
+    "Voiture" = accidents_voiture_age_grav,
+    "Moto" = accidents_moto_age_grav,
+    "Vélo" = accidents_velo_age_grav,
+    NULL
+  )
+  
+  # Graphique 2 : Proportion de chaque gravité par classe d'âge
+  ggplot(plot_data, aes(x = age_class, y = proportion_grav, fill = grav)) +
+    geom_bar(stat = "identity", position = "stack") +
+    labs(title = "Proportion des Accidents par Gravité et Classe d'Âge",
+         x = "Classe d'âge",
+         y = "Proportion d'Accidents",
+         fill = "Gravité") +
+    theme_minimal() +
+    scale_fill_brewer(palette = "Set1") +
+    geom_text(aes(label = scales::percent(proportion_grav, accuracy = 0.1)), 
+              position = position_stack(vjust = 0.5))  # Ajouter les proportions numériquement
+})
+output$dynamic_comments_transport_age <- renderUI({
+  req(responses$transport, responses$age)
+  
+  comments <- ifelse(
+    responses$transport == "Voiture" && responses$age >=18 && responses$age <=30, 
+    "Les jeunes conducteurs ont un risque plus élevé d'accidents en voiture.",
+    ifelse(
+      responses$transport == "Voiture" && responses$age > 30, 
+      "Les conducteurs plus âgés ont tendance à être plus prudents, mais les accidents sont souvent plus graves.",
+      ifelse(
+        responses$transport == "Moto" && responses$ages > 18 && reponses <=30, 
+        "Les accidents de moto sont plus graves en raison de l'exposition directe du conducteur.",
+        ifelse(
+          responses$transport == "Moto" && responses$age > 30, 
+          "Les cyclistes sont particulièrement vulnérables dans les zones urbaines à forte circulation.",
+          ifelse(responses$transport == "Vélo" && responses$age >18 && reponses$age <= 30, 
+          "Les cyclistes sont particulièrement vulnérables dans les zones urbaines à forte circulation.",
+            ifelse(responses$transport == "Vélo" && responses$age , 
+          "Les cyclistes sont particulièrement vulnérables dans les zones urbaines à forte circulation.",
+            )
+          )
+        )
+      )
+    )
+  )
+  
+  div(
+    h4("Commentaires spécifiques au mode de transport et à l'âge :"),
+    p(comments)
+  )
+})
+  
+
+  observeEvent(input$to_page1, {
+    updateTabsetPanel(session, "pages", selected = "page1")
+  })
+}
+```
+
+```{r}
+# UI principale
+ui <- fluidPage(
+  tabsetPanel(
+    id = "pages",
+    tabPanel("page1", page1_ui),
+    tabPanel("page2", page2_ui),
+    tabPanel("page3", page3_ui),
+    tabPanel("page4",page4_ui)
+  )
+)
+
+# Lancer l'application
+shinyApp(ui, server)
+
+```
+
+```{r}
+comments <- switch(
+    ("Voiture","H"),
+    ("Voiture","H") = "Les accidents de voiture sont les plus fréquents, mais les efforts pour réduire les collisions frontales ont réduit leur gravité ces dernières années."
+  )
+```
