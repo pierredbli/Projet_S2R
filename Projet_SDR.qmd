@@ -14,8 +14,11 @@ git push -u origin camille
 git pull origin main (actualise)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 git add . git commit -m "message" git push -u origin camille
 =======
+=======
+>>>>>>> 6ec302498f7bbabd12aafbd7f9793e1491a437ad
 git switch camille
 git branch (pour vérifier)
 =======

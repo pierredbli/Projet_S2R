@@ -1,0 +1,306 @@
+---
+title: "Fonction_Max"
+author: "Pierre DOBELI"
+format: html
+---
+
+## Function Max/Min features accidents
+
+```{r}
+# Importation des librairies
+library(readr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(tidyverse)
+library(randomForest)
+library(caret)
+
+
+```
+
+```{r}
+data <- read_csv("Data_test.csv",show_col_types = FALSE)
+
+data <- data %>%
+  mutate(datetime = paste(an, mois, jour, hrmn...14, sep = "-")) %>%
+  mutate(datetime = as.POSIXct(datetime, format = "%Y-%m-%d-%H:%M:%S")) %>% 
+  select(-jour, -mois, -an, -hrmn...14,-hrmn...15)  
+data <- data %>% drop_na()
+
+```
+
+```{r}
+data <- data %>%
+  mutate(
+    age = 2024 - an_nais,  # Calcul de l'âge
+    age_class = case_when(
+      age >= 18 & age <= 30 ~ "18-30",   # Classe 18-30 ans
+      age > 30 & age <= 45 ~ "30-45",   # Classe 30-45 ans
+      age > 45 & age <= 60 ~ "45-60",   # Classe 45-60 ans
+      age > 60 ~ "60+",                 # Classe 60+ ans
+    )
+  ) %>%
+  drop_na()
+```
+
+```{r}
+View(data)
+
+```
+
+Informations sur le code :
+
+Les targets sont les accidents grave, grav = 2 ou 3
+
+Il y a plusieurs features (caractéristiques qui influencent les accidents), lorsque le département, sexe, moyen de transport, age est sélectionné.
+
+trajet Motif du déplacement au moment de l’accident : -1 – Non renseigné 0 – Non renseigné 1 – Domicile – travail 2 – Domicile – école 3 – Courses – achats 4 – Utilisation professionnelle 5 – Promenade – loisirs 9 – Autre
+
+agg Localisation : 1 – Hors agglomération 2 – En agglomération
+
+atm Conditions atmosphériques : -1 – Non renseigné 1 – Normale 2 – Pluie légère 3 – Pluie forte 4 – Neige - grêle 5 – Brouillard - fumée 6 – Vent fort - tempête 7 – Temps éblouissant 8 – Temps couvert 9 – Autre
+
+surf Etat de la surface : -1 – Non renseigné 1 – Normale 2 – Mouillée 3 – Flaques 4 – Inondée 5 – Enneigée 6 – Boue 7 – Verglacée 8 – Corps gras – huile 9 – Autre
+
+```{r}
+generate_accident_graph_11 <- function(data, age_test, dep_test, sexe_test, moyen_transport_test) {
+  data_test <- data %>% 
+  filter(age_class == age_test & sexe == sexe_test & catv %in% moyen_transport_test & dep == dep_test)
+  # Filtrer les données pour ne garder que les accidents graves (grav = 2 ou 3)
+  accidents_graves <- data %>% filter(grav %in% c(2, 3))
+  
+  # Agréger les données par les combinaisons des features d'intérêt
+  accidents_aggreges <- accidents_graves %>%
+    group_by(trajet, agg, atm, surf) %>%
+    summarise(nb_accidents = n(), .groups = "drop") %>%
+    arrange(desc(nb_accidents))
+  
+  # Identifier la combinaison qui provoque le plus d'accidents graves
+  meilleure_combinaison <- accidents_aggreges %>% slice_max(nb_accidents, n = 1)
+  print(meilleure_combinaison)
+  
+  # Informations détaillées pour chaque feature
+  informations_features <- list(
+    trajet = c("-1" = "Non renseigné", "0" = "Non renseigné", "1" = "Domicile - travail", "2" = "Domicile - école",
+               "3" = "Courses - achats", "4" = "Utilisation professionnelle", "5" = "Promenade - loisirs", "9" = "Autre"),
+    agg = c("1" = "Hors agglomération", "2" = "En agglomération"),
+    atm = c("-1" = "Non renseigné", "1" = "Normale", "2" = "Pluie légère", "3" = "Pluie forte", "4" = "Neige - grêle",
+            "5" = "Brouillard - fumée", "6" = "Vent fort - tempête", "7" = "Temps éblouissant", "8" = "Temps couvert", "9" = "Autre"),
+    surf = c("-1" = "Non renseigné", "1" = "Normale", "2" = "Mouillée", "3" = "Flaques", "4" = "Inondée", "5" = "Enneigée",
+             "6" = "Boue", "7" = "Verglacée", "8" = "Corps gras - huile", "9" = "Autre")
+  )
+  
+  meilleure_combinaison_avec_details <- meilleure_combinaison %>%
+  mutate(
+    trajet = informations_features$trajet[as.character(trajet)],
+    agg = informations_features$agg[as.character(agg)],
+    atm = informations_features$atm[as.character(atm)],
+    surf = informations_features$surf[as.character(surf)]
+  )
+
+  # Afficher la meilleure combinaison avec les informations détaillées
+  phrase <- paste(
+    "La combinaison qui provoque le plus d'accidents graves est : trajet =",
+    meilleure_combinaison_avec_details$trajet, ", agg =",
+    meilleure_combinaison_avec_details$agg, ", atm =",
+    meilleure_combinaison_avec_details$atm, "et surf =",
+    meilleure_combinaison_avec_details$surf, "avec",
+    meilleure_combinaison_avec_details$nb_accidents, "accidents graves."
+  )
+  
+  print(meilleure_combinaison_avec_details)
+  
+  # Réunir les features dans un format long pour pouvoir facetter
+  accidents_long <- accidents_graves %>%
+    pivot_longer(cols = c(trajet, agg, atm, surf), names_to = "feature", values_to = "valeur")
+  
+  # Appliquer les labels en fonction des informations dans informations_features
+  accidents_long <- accidents_long %>%
+    mutate(valeur_label = case_when(
+      feature == "trajet" ~ factor(valeur, levels = names(informations_features$trajet), labels = informations_features$trajet),
+      feature == "agg" ~ factor(valeur, levels = names(informations_features$agg), labels = informations_features$agg),
+      feature == "atm" ~ factor(valeur, levels = names(informations_features$atm), labels = informations_features$atm),
+      feature == "surf" ~ factor(valeur, levels = names(informations_features$surf), labels = informations_features$surf)
+    ))
+  
+  # Créer un graphique avec des couleurs sombres et des légendes
+  graphique <- ggplot(accidents_long, aes(x = valeur_label, fill = valeur_label)) +
+    geom_bar(stat = "count") +
+    facet_wrap(~feature, scales = "free_x") +
+    labs(
+      title = "Nombre d'Accidents en Fonction des Features",
+      y = "Nombre d'Accidents",
+      fill = "Valeur"
+    ) +
+    scale_fill_manual(values = c("Non renseigné" = "#2c3e50", "Domicile - travail" = "#34495e", "Domicile - école" = "#5d6d7e", 
+                                "Courses - achats" = "#85929e", "Utilisation professionnelle" = "#aab7b8", "Promenade - loisirs" = "#ccd1d1", 
+                                "Autre" = "#d5dbdb", "Hors agglomération" = "#2ecc71", "En agglomération" = "#27ae60",
+                                "Normale" = "#e74c3c", "Pluie légère" = "#c0392b", "Pluie forte" = "#e74c3c", 
+                                "Neige - grêle" = "#8e44ad", "Brouillard - fumée" = "#9b59b6", "Vent fort - tempête" = "#8e44ad", 
+                                "Temps éblouissant" = "#f39c12", "Temps couvert" = "#f39c12", "Autre" = "#f1c40f", 
+                                "Mouillée" = "#2980b9", "Flaques" = "#3498db", "Inondée" = "#1abc9c", "Enneigée" = "#16a085", 
+                                "Boue" = "#2c3e50", "Verglacée" = "#7f8c8d", "Corps gras - huile" = "#95a5a6")) +
+    theme_minimal() +
+    theme(
+      legend.position = "right",        # Positionner la légende en bas
+      strip.text = element_text(size = 8),   # Taille du texte des titres des facettes
+      axis.title = element_text(size = 12),  # Taille des titres des axes
+      axis.text = element_text(size = 7, angle = 40),  # Taille et rotation du texte des axes
+      plot.title = element_text(size = 16, face = "bold"),  # Taille du titre principal
+      legend.text = element_text(size = 5),     # Taille du texte de la légende
+      axis.text.x = element_text(angle = 40, hjust = 1), # Rotation de l'axe X et ajustement pour l'aligner correctement
+      axis.text.y = element_text(angle = 40, hjust = 1)  # Rotation de l'axe Y si nécessaire
+    ) +
+    coord_cartesian(clip = "off")  # Pour empêcher le découpage du texte si nécessaire
+  
+  # Renvoi du graphique et de la meilleure combinaison avec détails
+  return(list(graphique = graphique, meilleure_combinaison_avec_details = phrase))
+}
+
+```
+
+```{r}
+result <- generate_accident_graph_11(data,"18-30", 33, 1, c(3, 7, 8, 9, 10))
+
+# Afficher le graphique
+print(result$graphique)
+
+# Afficher la meilleure combinaison avec les détails
+cat(result$meilleure_combinaison_avec_details)
+
+```
+
+Ok la fonction graphe fonctionne bien
+
+```{r}
+generate_accident_graph_11 <- function(data, age_test, dep_test, sexe_test, moyen_transport_test) {
+  data_test <- data %>% 
+    filter(age_class == age_test & sexe == sexe_test & catv %in% moyen_transport_test & dep == dep_test)
+  
+  # Filtrer les données pour ne garder que les accidents graves (grav = 2 ou 3)
+  accidents_graves <- data %>% filter(grav %in% c(2, 3))
+  
+  # Agréger les données par les combinaisons des features d'intérêt
+  accidents_aggreges <- accidents_graves %>%
+    group_by(trajet, agg, atm, surf) %>%
+    summarise(nb_accidents = n(), .groups = "drop") %>%
+    arrange(desc(nb_accidents))
+  
+  # Identifier la combinaison qui provoque le plus d'accidents graves
+  meilleure_combinaison <- accidents_aggreges %>% slice_max(nb_accidents, n = 1)
+  
+  # Informations détaillées pour chaque feature
+  informations_features <- list(
+    trajet = c("-1" = "Non renseigné", "0" = "Non renseigné", "1" = "Domicile - travail", "2" = "Domicile - école",
+               "3" = "Courses - achats", "4" = "Utilisation professionnelle", "5" = "Promenade - loisirs", "9" = "Autre"),
+    agg = c("1" = "Hors agglomération", "2" = "En agglomération"),
+    atm = c("-1" = "Non renseigné", "1" = "Normale", "2" = "Pluie légère", "3" = "Pluie forte", "4" = "Neige - grêle",
+            "5" = "Brouillard - fumée", "6" = "Vent fort - tempête", "7" = "Temps éblouissant", "8" = "Temps couvert", "9" = "Autre"),
+    surf = c("-1" = "Non renseigné", "1" = "Normale", "2" = "Mouillée", "3" = "Flaques", "4" = "Inondée", "5" = "Enneigée",
+             "6" = "Boue", "7" = "Verglacée", "8" = "Corps gras - huile", "9" = "Autre")
+  )
+  
+  meilleure_combinaison_avec_details <- meilleure_combinaison %>%
+    mutate(
+      trajet = informations_features$trajet[as.character(trajet)],
+      agg = informations_features$agg[as.character(agg)],
+      atm = informations_features$atm[as.character(atm)],
+      surf = informations_features$surf[as.character(surf)]
+    )
+  
+  # Phrase descriptive
+  phrase <- paste(
+    "La combinaison qui provoque le plus d'accidents graves est : trajet =",
+    meilleure_combinaison_avec_details$trajet, ", agg =",
+    meilleure_combinaison_avec_details$agg, ", atm =",
+    meilleure_combinaison_avec_details$atm, "et surf =",
+    meilleure_combinaison_avec_details$surf, "avec",
+    meilleure_combinaison_avec_details$nb_accidents, "accidents graves."
+  )
+  
+  # Réunir les features dans un format long pour pouvoir facetter
+  accidents_long <- accidents_graves %>%
+    pivot_longer(cols = c(trajet, agg, atm, surf), names_to = "feature", values_to = "valeur")
+  
+  # Appliquer les labels en fonction des informations dans informations_features
+  accidents_long <- accidents_long %>%
+    mutate(valeur_label = case_when(
+      feature == "trajet" ~ factor(valeur, levels = names(informations_features$trajet), labels = informations_features$trajet),
+      feature == "agg" ~ factor(valeur, levels = names(informations_features$agg), labels = informations_features$agg),
+      feature == "atm" ~ factor(valeur, levels = names(informations_features$atm), labels = informations_features$atm),
+      feature == "surf" ~ factor(valeur, levels = names(informations_features$surf), labels = informations_features$surf)
+    ))
+  
+  # Créer un graphique avec des couleurs sombres et des légendes
+  graphique <- ggplot(accidents_long, aes(x = valeur_label, fill = valeur_label)) +
+    geom_bar(stat = "count") +
+    facet_wrap(~feature, scales = "free_x") +
+    labs(
+      title = "Nombre d'Accidents en Fonction des Features",
+      y = "Nombre d'Accidents",
+      fill = "Valeur"
+    ) +
+    scale_fill_manual(values = c("Non renseigné" = "#2c3e50", "Domicile - travail" = "#34495e", "Domicile - école" = "#5d6d7e", 
+                                "Courses - achats" = "#85929e", "Utilisation professionnelle" = "#aab7b8", "Promenade - loisirs" = "#ccd1d1", 
+                                "Autre" = "#d5dbdb", "Hors agglomération" = "#2ecc71", "En agglomération" = "#27ae60",
+                                "Normale" = "#e74c3c", "Pluie légère" = "#c0392b", "Pluie forte" = "#e74c3c", 
+                                "Neige - grêle" = "#8e44ad", "Brouillard - fumée" = "#9b59b6", "Vent fort - tempête" = "#8e44ad", 
+                                "Temps éblouissant" = "#f39c12", "Temps couvert" = "#f39c12", "Autre" = "#f1c40f", 
+                                "Mouillée" = "#2980b9", "Flaques" = "#3498db", "Inondée" = "#1abc9c", "Enneigée" = "#16a085", 
+                                "Boue" = "#2c3e50", "Verglacée" = "#7f8c8d", "Corps gras - huile" = "#95a5a6")) +
+    theme_minimal() +
+    theme(
+      legend.position = "right",        
+      strip.text = element_text(size = 8),   
+      axis.title = element_text(size = 12),  
+      axis.text = element_text(size = 7, angle = 40),  
+      plot.title = element_text(size = 16, face = "bold"),  
+      legend.text = element_text(size = 5),     
+      axis.text.x = element_text(angle = 40, hjust = 1),
+      axis.text.y = element_text(angle = 40, hjust = 1)
+    ) +
+    coord_cartesian(clip = "off")  
+  
+  # Renvoi uniquement du graphique sans afficher les autres éléments
+  return(graphique)
+}
+
+```
+
+```{r}
+graphique <- generate_accident_graph_11(data, age_test = "18-25", dep_test = "75", sexe_test = 1, moyen_transport_test = c("1", "2"))
+print(graphique)
+
+```
+
+```{r}
+# Fonction qui permet de filtrer en fonction des choix des paramètres
+filter_data_choice <- function(data, class_age = NULL, sex = NULL, departement = NULL, moyen_transport = NULL) {
+  # Filtrer le dataFrame en fonction des arguments donnés
+  if (!is.null(age)) {
+    data <- data %>% filter(age_class == class_age)  # Comparer les chaînes de caractères pour l'âge
+  }
+  if (!is.null(sexe)) {
+    data <- data %>% filter(sexe == sex)
+  }
+  if (!is.null(departement)) {
+    data <- data %>% filter(dep == departement)
+  }
+  if (!is.null(moyen_transport)) {
+    data <- data %>% filter(trajet %in% moyen_transport)
+  }
+  
+  return(data)
+}
+```
+
+```{r}
+filter_data_choice(data, class_age = "18-30", sex = 1, departement = 33)
+
+```
+
+```{r}
+filtered_data
+```
